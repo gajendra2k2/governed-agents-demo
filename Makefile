@@ -1,4 +1,4 @@
-.PHONY: install up down logs producer server demo audit approve test clean
+.PHONY: install up down logs producer producer-fraud server agent agent-replay audit approve test clean
 
 install:
 	python -m pip install -e .
@@ -18,11 +18,17 @@ logs:
 producer:
 	python -m governed_agents.producer
 
+producer-fraud:
+	python -m governed_agents.producer --scenario fraud
+
 server:
 	python -m governed_agents.server.app
 
-demo:
-	python -m governed_agents.client.demo
+agent:
+	python -m governed_agents.client.agent
+
+agent-replay:
+	python -m governed_agents.client.replay $(FILE)
 
 audit:
 	python scripts/audit_viewer.py
@@ -35,4 +41,4 @@ test:
 	pytest -q tests/
 
 clean:
-	rm -rf state/ __pycache__ src/governed_agents/__pycache__ src/governed_agents/server/__pycache__ src/governed_agents/client/__pycache__
+	rm -rf state/ transcripts/ __pycache__ src/governed_agents/__pycache__ src/governed_agents/server/__pycache__ src/governed_agents/client/__pycache__

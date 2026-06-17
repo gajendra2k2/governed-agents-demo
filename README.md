@@ -2,41 +2,49 @@
 
 Companion repo for the talk **"Feeding the Agents — and Fencing Them: Engineering Governed Agentic Systems on Real-Time Data."**
 
-The thesis: **governance is not a policy layer around agents; it is a property of the data layer and the tool layer.** This demo makes that thesis runnable. The MCP server is the trust boundary. Every governance primitive (access control, shadow mode, human-in-the-loop, auditability, multi-model routing) is a small module you can read in under a minute.
+The thesis: **governance is not a policy layer around agents; it is a property of the data layer and the tool layer.** This demo makes that thesis runnable.
 
-> The repo is intentionally small enough to read in one sitting. Each governance primitive lives in its own file under `src/governed_agents/server/`.
+A real Claude Opus 4.7 agent is handed one open-ended goal — *"investigate possible fraud on customer C010 and act"* — and runs autonomously against an MCP server that fences what it's allowed to do. The audience watches the agent:
 
-## What the demo shows
+1. **Read** a live Kafka stream of orders and notice a suspicious burst.
+2. **Try** to take strong action (`freeze_customer_account`) and **get denied by the server** — not by its prompt.
+3. **Adapt**: fall back to `flag_order_for_review` and request a refund via an approval-gated tool.
+4. **Pause** for a real human to approve in another terminal.
+5. **Resume**, finalize the refund, summarize what it found.
 
-Six beats, each one re-running a Part 2/3 slide as real code:
+The audit topic captures every decision — including the denied attempt — as structured events on Kafka. That same primitive (the streaming lineage from the data layer) becomes auditability at the tool layer.
 
-| Beat | What happens                                            | Slide it makes concrete                |
-|------|---------------------------------------------------------|----------------------------------------|
-| 1    | Agent reads live orders from the stream.                | "Agents on real-time data"             |
-| 2    | Agent attempts a tier-3 tool → **server denies**.       | Access control & use-case tiering      |
-| 3    | High-tier agent calls `cancel_order` → **shadow mode**. | Shadow validation                      |
-| 4    | Agent calls `issue_refund` → suspends → operator approves. | Human-in-the-loop                    |
-| 5    | Flip to audit viewer: every call is a structured event. | Auditability as a streaming primitive  |
-| 6    | `assess_fraud_risk` routes Haiku/Sonnet/Opus by signal. | Scalable multi-model architecture      |
+> The repo is small enough to read in one sitting. Every governance primitive lives in its own ~40-line file under `src/governed_agents/server/`, so when the agent demo finishes, anyone who wants to understand the trick can.
 
-## Architecture (at a glance)
+## What's different about this demo
+
+| Common mistake in "agent demos"                                                                            | What this repo does instead                                                                                                      |
+|------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------|
+| "The agent did X" — but X was hardcoded in the script                                                      | A real Opus 4.7 agent picks tools, reasons, and adapts. Every tool call you watch is a real model decision.                       |
+| Identity is passed as an argument the LLM controls                                                         | Identity travels in an HTTP header set on the MCP transport. The model literally can't read or change it.                         |
+| The streaming data layer is decoration — the "agent" never reacts to it                                    | The producer seeds a deterministic fraud burst for C010. The agent must read the stream to do its job.                            |
+| Beats are pressed-Enter slides made of JSON                                                                | One continuous run. Reasoning streams live; tool calls and results render in real time; denials force visible course-correction.  |
+| Multi-model routing is a contrived demo step                                                               | The `assess_fraud_risk` tool routes Haiku/Sonnet/Opus internally by signal. The audience sees it in the audit log, no extra beat. |
+| Human-in-the-loop is hand-waved                                                                            | The agent really pauses. You really approve in another terminal. The audit log really records both.                                |
+
+## Architecture
 
 ```
                        ┌────────────────────────────┐
-                       │   producer.py (synthetic)  │
+                       │  producer (fraud scenario) │
                        └──────────────┬─────────────┘
                                       │ orders topic
                                       ▼
- demo client ──MCP/HTTP──▶  FastMCP server  ──consume──▶  SQLite order ledger
-                              │                          │
-                              ├── identity.py (policy enforcement)
-                              ├── shadow.py   (simulate writes)
-                              ├── approvals.py (HITL coordination)
-                              ├── routing.py  (multi-model)
-                              └── audit.py ──▶ audit topic ──▶ audit_viewer.py
-                                                    ▲
-                                                    │
-                                  scripts/approve.py (human)
+   agent (Opus 4.7) ──MCP/HTTP──▶  FastMCP server  ──consume──▶  SQLite order ledger
+   header: x-agent-identity        │
+                                   ├── identity.py (HTTP-header → policy)
+                                   ├── shadow.py   (simulate writes)
+                                   ├── approvals.py (HITL coordination)
+                                   ├── routing.py  (Haiku/Sonnet/Opus)
+                                   └── audit.py ──▶ audit topic ──▶ audit_viewer.py
+                                                         ▲
+                                                         │
+                                       scripts/approve.py (human in 2nd terminal)
 ```
 
 ## Prerequisites
@@ -44,6 +52,8 @@ Six beats, each one re-running a Part 2/3 slide as real code:
 - **Python ≥ 3.11** — macOS ships 3.9; install a newer one (instructions below).
 - **Docker** (Docker Desktop on macOS/Windows, or Docker Engine on Linux).
 - **`make`** — preinstalled on macOS via Xcode CLI tools; on Linux via your package manager.
+- **Anthropic API key** for the live run (`ANTHROPIC_API_KEY=sk-ant-...`).
+  Not needed for `make agent-replay` (replays a saved transcript with no API call).
 
 ### macOS first-time setup
 
@@ -51,15 +61,13 @@ The system `python` command doesn't exist by default (only `python3` → 3.9). I
 
 ```bash
 brew install python@3.12
+brew install --cask docker      # if Docker Desktop not already installed
 ```
-
-This gives you `/opt/homebrew/bin/python3.12`. Use that to create the venv below.
 
 ### Linux first-time setup
 
 ```bash
 sudo apt-get install -y python3.12 python3.12-venv make docker.io   # Debian/Ubuntu
-# or use your distro's equivalent
 ```
 
 ## Quickstart
@@ -67,81 +75,116 @@ sudo apt-get install -y python3.12 python3.12-venv make docker.io   # Debian/Ubu
 ```bash
 git clone https://github.com/gajendra2k2/governed-agents-demo
 cd governed-agents-demo
-cp .env.example .env                            # edit if you have an Anthropic key
+cp .env.example .env                            # add your ANTHROPIC_API_KEY
 
-# Create the venv with Python 3.12 specifically (system python3 may be too old).
+# Venv with Python 3.12 specifically (system python3 may be too old).
 /opt/homebrew/bin/python3.12 -m venv .venv      # macOS — adjust path on Linux
 source .venv/bin/activate
-make install                                    # pip install -e .
-make test                                       # smoke tests — no Kafka needed yet
+make install
+make test                                       # smoke tests (no Kafka needed yet)
 ```
 
-If you ever see `command not found: python`, your venv isn't activated. Either run `source .venv/bin/activate` again, or invoke directly with `.venv/bin/python`.
+If you ever see `command not found: python`, your venv isn't activated. Either `source .venv/bin/activate`, or invoke as `.venv/bin/python`.
 
-### Running the demo (four terminals)
+## Running the demo — four terminals
 
-Each terminal must `source .venv/bin/activate` first.
+Each terminal: `source .venv/bin/activate` first.
 
 ```bash
-make up                             # T1 — docker compose up Kafka (KRaft, no ZK)
-make producer                       # T1 — start the order stream (leave running)
-make server                         # T2 — start the MCP server
-make audit                          # T3 — audit viewer (Beat 5 reveal)
-make demo                           # T4 — drive the six beats
-# during Beat 4, in any terminal:   make approve ID=<approval_id printed by the demo>
+# T1 — Kafka + the fraud-seeded order stream
+make up && make producer-fraud
+
+# T2 — MCP server (reads x-agent-identity header on every request)
+make server
+
+# T3 — color tail of the audit topic (Beat 5 reveal)
+make audit
+
+# T4 — the live agent run; reasons, picks tools, hits a denial, requests approval
+make agent
+
+# When the agent pauses for approval, it prints  >>>  make approve ID=A-XXXXXXXX
+# Run that in ANY terminal (or T1 after Ctrl+C the producer) and answer y.
+# The agent resumes automatically.
 ```
 
-For the live talk, see [`DEMO_SCRIPT.md`](DEMO_SCRIPT.md) — every beat, every command, every line to say.
+Approximate timing: ~3 minutes for the agent investigation + ~30s human approval + 1 min audit reveal = **~5 minutes of live demo**. Add 30s of setup narration and you have a tight 6-minute showpiece in a 50-minute talk.
 
-### Troubleshooting
+## Talk-day insurance: replay a recorded run
 
-| Symptom                                            | Fix                                                                          |
-|----------------------------------------------------|------------------------------------------------------------------------------|
-| `command not found: python`                        | Venv isn't activated. `source .venv/bin/activate`, or use `.venv/bin/python`.|
-| `ERROR: Package requires a different Python: 3.9.x`| Your venv used system Python. Recreate with `python3.12 -m venv .venv`.      |
-| `make up` hangs / Kafka container restarts         | Docker Desktop isn't running, or port 9092 is taken. Stop the conflict, retry.|
-| Beat 6 fails with auth error                       | Set `OFFLINE_MODE=true` in `.env` and restart the server.                    |
-| `make demo` says "No orders found"                 | Producer isn't running. `make producer` in another terminal, then rerun.     |
+Every `make agent` writes a JSON transcript to `transcripts/agent-<utc>.json`. If conference Wi-Fi or Anthropic API has a bad moment on talk day, use the replay:
 
-## Offline mode (for unreliable conference Wi-Fi)
+```bash
+make agent-replay                       # replays the latest transcript
+make agent-replay FILE=transcripts/agent-20260617T120000Z.json   # specific file
+```
 
-Set `OFFLINE_MODE=true` in `.env`. Beats 1–5 never call an LLM, so they're already offline. Beat 6 (multi-model routing) returns canned per-model responses so the demo never fails on the network.
+The replay re-renders the agent's reasoning, tool calls, and audit events at a stage-friendly pace — visually indistinguishable from a live run.
+
+For the talk, do one good live run the morning of, then keep the resulting transcript as your fallback.
 
 ## Repo layout
 
 ```
 src/governed_agents/
-  config.py        # env config
-  topics.py        # Kafka topic names
-  policy.yaml      # identity → tier → tools (THE governance contract)
-  producer.py      # synthetic order event stream
-  llm.py           # Anthropic wrapper with offline canned-response mode
+  config.py           # env config
+  topics.py           # Kafka topic names
+  policy.yaml         # identity → tier → tools (THE governance contract)
+  producer.py         # synthetic order stream + --scenario fraud
+  llm.py              # multi-model wrapper with offline canned-response mode
   server/
-    app.py         # FastMCP server entry + orders→ledger consumer
-    identity.py    # AccessDenied lives here
-    audit.py       # writes structured events to the audit Kafka topic
-    shadow.py      # simulate writes, return would-be effect
-    approvals.py   # request / decide approval, SQLite + Kafka
-    routing.py     # Haiku/Sonnet/Opus by risk signal
-    state.py       # SQLite store (orders + approvals)
-    tools.py       # the six tools, each wrapped through identity.check
+    app.py            # FastMCP server, identity from HTTP header, 7 tools
+    identity.py       # AccessDenied + from_http() (reads x-agent-identity)
+    audit.py          # writes structured events to the audit Kafka topic
+    shadow.py         # simulate writes, return would-be effect
+    approvals.py      # request / decide approval, SQLite + Kafka
+    routing.py        # Haiku/Sonnet/Opus by risk signal
+    state.py          # SQLite store (orders + approvals)
+    tools.py          # 7 tools, each wrapped through identity.check
   client/
-    demo.py        # six-beat scripted client
+    agent.py          # the real agent: Opus 4.7 tool loop with live rendering
+    replay.py         # replay a saved transcript at stage pace
 scripts/
-  approve.py       # operator CLI for Beat 4
-  audit_viewer.py  # color tail of the audit topic
+  approve.py          # operator CLI for human-in-the-loop
+  audit_viewer.py     # color tail of the audit topic
 ```
+
+## Tools & tiers (the governance contract)
+
+| Tool                       | Tier | Identities allowed       | Behavior                                  |
+|----------------------------|------|--------------------------|-------------------------------------------|
+| `list_recent_orders`       | 1    | viewer, fraud_investigator, ops_human | Read |
+| `get_order_details`        | 1    | viewer, fraud_investigator, ops_human | Read |
+| `assess_fraud_risk`        | 1    | viewer, fraud_investigator, ops_human | Read — internally routes Haiku/Sonnet/Opus by signal |
+| `flag_order_for_review`    | 2    | fraud_investigator, ops_human         | Logged + executed |
+| `freeze_customer_account`  | 3    | ops_human (humans only)               | **Denied for any agent** — the central "fence" moment |
+| `cancel_order`             | 4    | ops_human                             | Shadow mode by default |
+| `issue_refund`             | 5    | fraud_investigator, ops_human         | Approval-gated; agent must wait for human |
+
+The `fraud_investigator` identity (used by the agent) gets tiers 1, 2, and 5 — by design it can investigate and request refunds, but **cannot freeze or cancel directly**. That's the gap the agent discovers at runtime.
 
 ## Production hardening (what this demo deliberately doesn't do)
 
-This is a teaching artifact, not a production reference. The real-system path is:
+A teaching artifact, not a production reference.
 
-- **Identity is passed as a tool arg here** — clear for the audience, wrong for production. Real systems carry identity in transport (OAuth/OIDC, mTLS, signed headers) so the model never sees it and can't impersonate.
-- **No tenant isolation.** A real multi-tenant deployment partitions Kafka topics, SQLite (→ a proper DB), and approval queues by tenant.
-- **Approvals coordination via SQLite.** Fine for one box; a real deployment uses a durable queue + signed approval tokens.
-- **No rate limiting / cost ceilings on routing.** Real multi-model routing needs per-tier budgets and circuit breakers.
+- **Identity in HTTP header is realistic in shape but not in form.** Production should sign the header with OAuth/OIDC or mTLS so the agent can't fabricate one. Here the client sets it on connection trust.
+- **Single-tenant.** Real multi-tenant deployments partition Kafka topics + DB + approval queues by tenant.
+- **SQLite for approval coordination.** Fine for one box; production uses a durable queue + signed approval tokens.
+- **No rate limiting / cost ceilings on the routing tool.** Real multi-model needs per-tier budgets and circuit breakers.
 
-These are good Q&A material — and a slide in Part 3.
+These are all good Q&A material — and a slide in the talk's Part 3.
+
+## Troubleshooting
+
+| Symptom                                             | Fix                                                                          |
+|-----------------------------------------------------|------------------------------------------------------------------------------|
+| `command not found: python`                         | Venv not activated. `source .venv/bin/activate`, or use `.venv/bin/python`.  |
+| `ERROR: Package requires a different Python: 3.9.x` | Recreate venv with `python3.12 -m venv .venv`.                                |
+| `make up` hangs / Kafka restarts                    | Docker Desktop not running, or port 9092 in use. Stop the conflict, retry.   |
+| Agent crashes on Turn 1 with `BadRequestError`      | Check `ANTHROPIC_API_KEY` in `.env`; check Anthropic billing has credits.    |
+| `make agent` says "MCP server not reachable"        | The server isn't up — `make server` in another terminal.                     |
+| Agent skips reading the stream                      | Producer isn't running. `make producer-fraud`.                                |
+| Stuck in approval poll                              | Run `make approve ID=<id>` in any terminal. The agent waits up to 120s.       |
 
 ## License
 
