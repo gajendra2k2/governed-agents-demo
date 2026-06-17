@@ -39,26 +39,69 @@ Six beats, each one re-running a Part 2/3 slide as real code:
                                   scripts/approve.py (human)
 ```
 
-## Quickstart
+## Prerequisites
 
-Requires Python ≥ 3.11, Docker, and `make`. Tested on macOS and Linux.
+- **Python ≥ 3.11** — macOS ships 3.9; install a newer one (instructions below).
+- **Docker** (Docker Desktop on macOS/Windows, or Docker Engine on Linux).
+- **`make`** — preinstalled on macOS via Xcode CLI tools; on Linux via your package manager.
+
+### macOS first-time setup
+
+The system `python` command doesn't exist by default (only `python3` → 3.9). Install a modern Python:
+
+```bash
+brew install python@3.12
+```
+
+This gives you `/opt/homebrew/bin/python3.12`. Use that to create the venv below.
+
+### Linux first-time setup
+
+```bash
+sudo apt-get install -y python3.12 python3.12-venv make docker.io   # Debian/Ubuntu
+# or use your distro's equivalent
+```
+
+## Quickstart
 
 ```bash
 git clone https://github.com/gajendra2k2/governed-agents-demo
 cd governed-agents-demo
-cp .env.example .env                # edit if you have an Anthropic key
-python -m venv .venv && source .venv/bin/activate
-make install                        # pip install -e .
+cp .env.example .env                            # edit if you have an Anthropic key
 
-make up                             # docker compose up Kafka (KRaft, no ZK)
-make producer                       # terminal 1 — start the order stream
-make server                         # terminal 2 — start the MCP server
-make audit                          # terminal 3 — audit viewer (Beat 5)
-make demo                           # terminal 4 — drive the six beats
+# Create the venv with Python 3.12 specifically (system python3 may be too old).
+/opt/homebrew/bin/python3.12 -m venv .venv      # macOS — adjust path on Linux
+source .venv/bin/activate
+make install                                    # pip install -e .
+make test                                       # smoke tests — no Kafka needed yet
+```
+
+If you ever see `command not found: python`, your venv isn't activated. Either run `source .venv/bin/activate` again, or invoke directly with `.venv/bin/python`.
+
+### Running the demo (four terminals)
+
+Each terminal must `source .venv/bin/activate` first.
+
+```bash
+make up                             # T1 — docker compose up Kafka (KRaft, no ZK)
+make producer                       # T1 — start the order stream (leave running)
+make server                         # T2 — start the MCP server
+make audit                          # T3 — audit viewer (Beat 5 reveal)
+make demo                           # T4 — drive the six beats
 # during Beat 4, in any terminal:   make approve ID=<approval_id printed by the demo>
 ```
 
 For the live talk, see [`DEMO_SCRIPT.md`](DEMO_SCRIPT.md) — every beat, every command, every line to say.
+
+### Troubleshooting
+
+| Symptom                                            | Fix                                                                          |
+|----------------------------------------------------|------------------------------------------------------------------------------|
+| `command not found: python`                        | Venv isn't activated. `source .venv/bin/activate`, or use `.venv/bin/python`.|
+| `ERROR: Package requires a different Python: 3.9.x`| Your venv used system Python. Recreate with `python3.12 -m venv .venv`.      |
+| `make up` hangs / Kafka container restarts         | Docker Desktop isn't running, or port 9092 is taken. Stop the conflict, retry.|
+| Beat 6 fails with auth error                       | Set `OFFLINE_MODE=true` in `.env` and restart the server.                    |
+| `make demo` says "No orders found"                 | Producer isn't running. `make producer` in another terminal, then rerun.     |
 
 ## Offline mode (for unreliable conference Wi-Fi)
 
