@@ -1,7 +1,7 @@
 .PHONY: install up down logs producer producer-fraud server agent agent-replay audit approve test clean
 
 install:
-	python -m pip install -e .
+	python -m pip install -e '.[dev]'
 
 up:
 	docker compose up -d

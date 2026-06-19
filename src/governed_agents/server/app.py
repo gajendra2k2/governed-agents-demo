@@ -1,7 +1,7 @@
 """FastMCP server — the governance surface.
 
 Identity arrives on the inbound HTTP request as `x-agent-identity`. The model
-never sees it, can't pass it, can't change it. The 7 MCP tool signatures below
+never sees it, can't pass it, can't change it. The 8 MCP tool signatures below
 contain ONLY the business arguments — that is the trust boundary in code.
 
 Also runs a background thread that consumes the `orders` Kafka stream into the
@@ -60,8 +60,9 @@ def flag_order_for_review(order_id: str, reason: str) -> dict:
 
 @mcp.tool
 def freeze_customer_account(customer_id: str, reason: str) -> dict:
-    """Freeze a customer account — irreversible. Restricted to human operators
-    only. Agents will receive an access-denied response."""
+    """Freeze a customer account in response to confirmed fraud. Stops all
+    pending orders and incoming charges. Use when you have strong evidence
+    the account is compromised."""
     return tools.freeze_customer_account(_actor(), customer_id, reason)
 
 

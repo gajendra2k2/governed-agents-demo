@@ -1,15 +1,16 @@
 """Terminal audit viewer — tail the Kafka `audit` topic with color.
 
-Run in its own terminal during the demo: `make audit`.
-Beat 5 of the demo flips to this window to show the audience that every tool
-call — including the denied one and the shadow-mode simulation — produced a
-structured, queryable event.
+Run in its own terminal during the demo: `make audit`. Phase 3 of the demo
+flips to this window to show the audience that every tool call the agent made
+— including the denied one — is a structured, queryable event on a topic that
+any consumer can subscribe to.
 """
 from __future__ import annotations
 
 import json
 import signal
 import sys
+import uuid
 
 from confluent_kafka import Consumer
 from rich.console import Console
@@ -53,9 +54,11 @@ def render(event: dict) -> None:
 
 
 def main() -> int:
+    # Unique group per startup so topic deletes/recreates between demo runs
+    # never leave the viewer stuck on a stale offset.
     consumer = Consumer({
         "bootstrap.servers": SETTINGS.kafka_bootstrap,
-        "group.id": "audit-viewer",
+        "group.id": f"audit-viewer-{uuid.uuid4().hex[:8]}",
         "auto.offset.reset": "earliest",
         "enable.auto.commit": False,
     })

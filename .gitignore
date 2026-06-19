@@ -8,3 +8,9 @@ state/
 *.db
 .pytest_cache/
 .DS_Store
+
+# Agent transcripts are personal/large; gitignored by default.
+# To ship a canonical run as talk-day insurance:
+#   git add -f transcripts/canonical.json && git commit
+transcripts/
+!transcripts/canonical.json

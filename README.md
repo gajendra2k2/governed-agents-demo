@@ -97,7 +97,7 @@ make up && make producer-fraud
 # T2 — MCP server (reads x-agent-identity header on every request)
 make server
 
-# T3 — color tail of the audit topic (Beat 5 reveal)
+# T3 — color tail of the audit topic (Phase 3 reveal)
 make audit
 
 # T4 — the live agent run; reasons, picks tools, hits a denial, requests approval
@@ -108,7 +108,7 @@ make agent
 # The agent resumes automatically.
 ```
 
-Approximate timing: ~3 minutes for the agent investigation + ~30s human approval + 1 min audit reveal = **~5 minutes of live demo**. Add 30s of setup narration and you have a tight 6-minute showpiece in a 50-minute talk.
+Approximate timing on Opus 4.7: 4-6 min agent investigation + ~30s human approval + ~2 min audit reveal + narration = **~8-12 min of live demo**, which fits the ~13 min slot in [`TALK.md`](TALK.md). Faster on Sonnet 4.6 (~5-7 min total) but with slightly less impressive reasoning text on stage.
 
 ## Talk-day insurance: replay a recorded run
 
@@ -119,9 +119,14 @@ make agent-replay                       # replays the latest transcript
 make agent-replay FILE=transcripts/agent-20260617T120000Z.json   # specific file
 ```
 
-The replay re-renders the agent's reasoning, tool calls, and audit events at a stage-friendly pace — visually indistinguishable from a live run.
+The replay re-renders the agent's reasoning, tool calls, the approval prompt, and the human's decision at a stage-friendly pace — visually indistinguishable from a live run.
 
-For the talk, do one good live run the morning of, then keep the resulting transcript as your fallback.
+For the talk, do one good live run the morning of, then keep the resulting transcript as your fallback. To ship a canonical run *inside* this repo so anyone can `make agent-replay` without an API key:
+```bash
+cp transcripts/agent-<your-best-run>.json transcripts/canonical.json
+git add -f transcripts/canonical.json   # the gitignore allows this exact file
+git commit -m "Add canonical replay transcript" && git push
+```
 
 ## Repo layout
 
@@ -133,14 +138,14 @@ src/governed_agents/
   producer.py         # synthetic order stream + --scenario fraud
   llm.py              # multi-model wrapper with offline canned-response mode
   server/
-    app.py            # FastMCP server, identity from HTTP header, 7 tools
+    app.py            # FastMCP server, identity from HTTP header, 8 tools
     identity.py       # AccessDenied + from_http() (reads x-agent-identity)
     audit.py          # writes structured events to the audit Kafka topic
     shadow.py         # simulate writes, return would-be effect
     approvals.py      # request / decide approval, SQLite + Kafka
     routing.py        # Haiku/Sonnet/Opus by risk signal
     state.py          # SQLite store (orders + approvals)
-    tools.py          # 7 tools, each wrapped through identity.check
+    tools.py          # 7 governance-checked tools + check_approval meta-tool
   client/
     agent.py          # the real agent: Opus 4.7 tool loop with live rendering
     replay.py         # replay a saved transcript at stage pace
@@ -160,6 +165,7 @@ scripts/
 | `freeze_customer_account`  | 3    | ops_human (humans only)               | **Denied for any agent** — the central "fence" moment |
 | `cancel_order`             | 4    | ops_human                             | Shadow mode by default |
 | `issue_refund`             | 5    | fraud_investigator, ops_human         | Approval-gated; agent must wait for human |
+| `check_approval`           | —    | (no policy gate — meta-tool)          | Polls approval status — used by the agent to detect when a human has decided |
 
 The `fraud_investigator` identity (used by the agent) gets tiers 1, 2, and 5 — by design it can investigate and request refunds, but **cannot freeze or cancel directly**. That's the gap the agent discovers at runtime.
 

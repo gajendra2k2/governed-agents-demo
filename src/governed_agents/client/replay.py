@@ -1,8 +1,8 @@
-"""Transcript replayer — replays a saved agent run as if it were live.
+"""Transcript replayer — re-renders a saved agent run at stage pace.
 
 Use this when:
   - Conference Wi-Fi is unreliable
-  - You want a deterministic run for stage timing
+  - You want a deterministic run with predictable timing
   - You want to show the demo without paying for an API call
 
 Usage:
@@ -19,9 +19,13 @@ import time
 from pathlib import Path
 
 from rich.console import Console
+from rich.panel import Panel
+from rich.rule import Rule
+from rich.text import Text
 
 from ..config import SETTINGS
 from .agent import (
+    render_approval_decision,
     render_approval_prompt,
     render_header,
     render_thinking,
@@ -29,18 +33,16 @@ from .agent import (
     render_tool_result,
     render_turn_marker,
 )
-from rich.panel import Panel
-from rich.rule import Rule
-from rich.text import Text
 
 console = Console()
 TRANSCRIPTS_DIR = SETTINGS.state_dir.parent / "transcripts"
 
-# Realistic pacing between elements
-PAUSE_TURN = 0.5
-PAUSE_THINK = 1.2
-PAUSE_TOOL = 0.8
-PAUSE_APPROVAL = 3.0
+# Realistic pacing between elements.
+PAUSE_TURN = 0.6
+PAUSE_THINK = 1.3
+PAUSE_TOOL_BEFORE = 0.6
+PAUSE_TOOL_AFTER = 1.0
+PAUSE_APPROVAL_WAIT = 3.5    # the "human is thinking" beat
 
 
 def _latest_transcript() -> Path | None:
@@ -58,23 +60,29 @@ def replay(path: Path, speed: float) -> int:
     for turn in record["turns"]:
         time.sleep(PAUSE_TURN / speed)
         render_turn_marker(turn["turn"])
+
         if turn.get("text"):
             time.sleep(PAUSE_THINK / speed)
             render_thinking(turn["text"])
+
+        results_by_id = {r["tool_use_id"]: r for r in turn.get("tool_results", [])}
         for use in turn.get("tool_uses", []):
-            time.sleep(PAUSE_TOOL / speed)
+            time.sleep(PAUSE_TOOL_BEFORE / speed)
             render_tool_call(use["name"], use["input"])
-            # find the matching result
-            results = turn.get("tool_results", [])
-            r = next((r for r in results if r["tool_use_id"] == use["id"]), None)
-            if r is not None:
-                time.sleep(PAUSE_TOOL / speed)
-                render_tool_result(use["name"], r["data"])
-                # surface approval prompt at the right moment for narration
-                if isinstance(r["data"], dict) and r["data"].get("status") in ("approved", "rejected", "awaiting_approval"):
-                    if r["data"].get("status") == "approved":
-                        # Simulate the wait: show the approval prompt, pause, then show approval
-                        time.sleep(PAUSE_APPROVAL / speed)
+            r = results_by_id.get(use["id"])
+            if r is None:
+                continue
+            time.sleep(PAUSE_TOOL_AFTER / speed)
+            # Render the initial server response (e.g., awaiting_approval).
+            render_tool_result(use["name"], r["data"])
+
+            # If the live run included an approval handshake, replay the
+            # full theatrical arc: prompt → wait → decision.
+            ap = r.get("approval")
+            if ap is not None:
+                render_approval_prompt(ap["approval_id"])
+                time.sleep(PAUSE_APPROVAL_WAIT / speed)
+                render_approval_decision(ap["approval_id"], ap["status"], ap.get("approver"))
 
     console.print()
     console.print(Rule("[bold green]Investigation complete (replay)[/]"))
@@ -96,6 +104,7 @@ def main() -> int:
         p = _latest_transcript()
         if p is None:
             console.print(f"[red]no transcripts found in {TRANSCRIPTS_DIR}[/]")
+            console.print("[dim]run `make agent` once first to capture one[/]")
             return 1
         console.print(f"[dim]using latest: {p}[/]")
 

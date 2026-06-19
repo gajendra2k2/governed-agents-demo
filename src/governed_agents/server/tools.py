@@ -1,9 +1,11 @@
-"""The seven tools the agent can call. Every one routes through identity.check
-first, then dispatches based on the policy declaration for that tool.
+"""The seven governance-checked tools the agent can call, plus `check_approval`
+(a non-gated meta-tool used only to poll approval state).
 
-Identity is sourced from the HTTP request header `x-agent-identity` — it never
-appears in any LLM-visible argument. The model literally cannot pass identity
-to the server, can't read its own, can't forge another.
+Every governance-checked tool routes through identity.check first, then
+dispatches based on the policy declaration for that tool. Identity is sourced
+from the HTTP request header `x-agent-identity` — it never appears in any
+LLM-visible argument. The model literally cannot pass identity to the server,
+can't read its own, can't forge another.
 """
 from __future__ import annotations
 

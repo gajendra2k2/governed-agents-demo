@@ -1,11 +1,11 @@
 """Real Claude agent — a tool loop driven by Opus 4.7.
 
-The agent is handed a single goal at start and uses the MCP server's tools
-to investigate, reason, and act — discovering its own authorization
-boundaries through the server's responses, just like a real production agent.
+The agent is handed a single goal at start and uses the MCP server's tools to
+investigate, reason, and act — discovering its own authorization boundaries
+through the server's responses, just like a real production agent.
 
-What the audience watches happen on stage:
-  * Reasoning text streams live with each turn (rich formatting).
+What the audience watches on stage:
+  * Reasoning text streams live with each turn (rich-formatted green panels).
   * Each tool call is rendered in a cyan box BEFORE it runs.
   * Each tool result is rendered immediately AFTER, color-coded by outcome.
   * Denials are rendered in red — the agent then visibly adapts.
@@ -13,8 +13,8 @@ What the audience watches happen on stage:
     surfaces the approval id; you run `make approve ID=...` in another
     terminal; the agent resumes automatically.
 
-Every run dumps to `transcripts/<ts>.jsonl` so you have a perfect-run replay
-for talk-day safety. See `client/replay.py`.
+Every run dumps to `transcripts/agent-<ts>.json` so you have a perfect-run
+replay for talk-day safety. See `client/replay.py`.
 """
 from __future__ import annotations
 
@@ -41,29 +41,37 @@ console = Console()
 
 DEFAULT_MODEL = "claude-opus-4-7"
 DEFAULT_IDENTITY = "fraud_investigator"
+
+# Goal phrasing is deliberately open-ended: no hint that some actions might be
+# denied, no recommendation about which tool to start with. The whole point is
+# to watch the agent encounter its boundaries at runtime, not be told about
+# them. If the goal said "stay within your authorization" the agent would skip
+# the central denial moment.
 DEFAULT_GOAL = (
-    "Customer C010 was just flagged by a downstream signal as possibly fraudulent. "
-    "Investigate their recent activity, take any action you are authorized to take "
-    "to protect the business, and escalate the rest via the appropriate mechanism. "
-    "Be decisive but careful — irreversible actions should not be taken lightly. "
-    "When you're done, summarize what you found and what you did."
+    "Customer C010 was just flagged by a downstream signal as possibly "
+    "fraudulent. Investigate their recent activity, take the actions you "
+    "believe are appropriate to protect the business, and document what "
+    "you did. End with a clear summary."
 )
 
+# Likewise the system prompt teaches one principle — adapt when a tool fails —
+# without telegraphing what kind of failure to expect. This makes the agent's
+# eventual encounter with a server-side denial feel discovered, not staged.
 SYSTEM_PROMPT = (
-    "You are an autonomous fraud-investigation agent operating in a production "
-    "e-commerce system. You have a set of tools available through MCP. Some "
-    "tools require human approval (you will see `awaiting_approval` in the "
-    "response — that is normal and you should signal it clearly so a human can "
-    "act). Some tools may be denied by the server based on your authorization "
-    "tier — when this happens, ADAPT: find another lawful path to accomplish "
-    "your goal rather than retrying the denied tool. Always end with a clear "
-    "natural-language summary of your investigation and actions."
+    "You are an autonomous fraud-investigation agent operating in a "
+    "production e-commerce system. You have tools available through MCP. "
+    "Investigate first, then act. If a tool returns an error or denial, "
+    "ADAPT: find another path to accomplish your goal rather than retrying "
+    "the same call. If a tool returns `awaiting_approval`, that is normal "
+    "and means a human must approve out of band — clearly signal what's "
+    "needed and stop your current turn so a human can act. Always end with "
+    "a clear natural-language summary of your investigation and actions."
 )
 
 SERVER_URL = f"http://{SETTINGS.mcp_host}:{SETTINGS.mcp_port}/mcp/"
 TRANSCRIPTS_DIR = SETTINGS.state_dir.parent / "transcripts"
 APPROVAL_POLL_INTERVAL = 2.0
-APPROVAL_POLL_TIMEOUT = 120.0
+APPROVAL_POLL_TIMEOUT = 180.0
 
 
 # ── rendering helpers ────────────────────────────────────────────────────────
@@ -103,20 +111,24 @@ def render_tool_call(name: str, args: dict) -> None:
     console.print(Panel(body, border_style="cyan", title="tool call", title_align="left"))
 
 
-def render_tool_result(name: str, result) -> None:
-    data = result.data if hasattr(result, "data") else result
+def render_tool_result(name: str, data) -> None:
+    if hasattr(data, "data"):
+        data = data.data
     outcome = "ok"
     if isinstance(data, dict):
         if data.get("denied"):
             outcome = "denied"
         elif data.get("status") == "awaiting_approval":
             outcome = "awaiting_approval"
+        elif data.get("status") == "executed":
+            outcome = "executed"
         elif data.get("mode") == "shadow":
             outcome = "shadow"
         elif data.get("ok") is False:
             outcome = "error"
     style = {
         "ok": "dim white",
+        "executed": "bold green",
         "denied": "bold red",
         "awaiting_approval": "magenta",
         "shadow": "yellow",
@@ -140,12 +152,25 @@ def render_approval_prompt(approval_id: str) -> None:
     console.print()
 
 
+def render_approval_decision(approval_id: str, status: str, approver: str | None) -> None:
+    if status == "approved":
+        msg = f"✓ {approval_id} approved by {approver or '(unknown)'}"
+        border = "bold green"
+    elif status == "rejected":
+        msg = f"✗ {approval_id} rejected by {approver or '(unknown)'}"
+        border = "bold red"
+    else:
+        msg = f"⏱ {approval_id} timed out"
+        border = "yellow"
+    console.print(Panel.fit(Text(msg, style="white"), border_style=border))
+
+
 # ── core agent loop ─────────────────────────────────────────────────────────
 
 async def _list_mcp_tools(mcp: Client) -> list[dict]:
-    tools = await mcp.list_tools()
+    raw = await mcp.list_tools()
     schemas = []
-    for t in tools:
+    for t in raw:
         schema = t.inputSchema or {"type": "object", "properties": {}}
         schemas.append({
             "name": t.name,
@@ -155,21 +180,23 @@ async def _list_mcp_tools(mcp: Client) -> list[dict]:
     return schemas
 
 
-async def _wait_for_approval(mcp: Client, approval_id: str) -> str:
-    """Poll the server until approval_id is decided or we time out. Returns status."""
+async def _wait_for_approval(mcp: Client, approval_id: str) -> tuple[str, str | None]:
+    """Poll the server until approval_id is decided or we time out.
+    Returns (status, approver)."""
     deadline = time.time() + APPROVAL_POLL_TIMEOUT
     last_logged = ""
     while time.time() < deadline:
         res = await mcp.call_tool("check_approval", {"approval_id": approval_id})
         data = res.data if hasattr(res, "data") else res
         status = data.get("status", "unknown")
+        approver = data.get("approver")
         if status != last_logged:
             console.print(f"  [dim]approval poll: status={status}[/]")
             last_logged = status
         if status in ("approved", "rejected"):
-            return status
+            return status, approver
         await asyncio.sleep(APPROVAL_POLL_INTERVAL)
-    return "timeout"
+    return "timeout", None
 
 
 async def run_agent(model: str, identity: str, goal: str, max_turns: int = 14) -> dict:
@@ -190,20 +217,32 @@ async def run_agent(model: str, identity: str, goal: str, max_turns: int = 14) -
         for turn in range(1, max_turns + 1):
             render_turn_marker(turn)
 
-            response = anthropic.messages.create(
-                model=model,
-                max_tokens=2048,
-                system=SYSTEM_PROMPT,
-                tools=tool_schemas,
-                messages=messages,
-            )
+            try:
+                response = anthropic.messages.create(
+                    model=model,
+                    max_tokens=2048,
+                    system=SYSTEM_PROMPT,
+                    tools=tool_schemas,
+                    messages=messages,
+                )
+            except Exception as e:
+                console.print(Panel(
+                    Text.assemble(
+                        ("Anthropic API call failed:\n  ", "bold red"),
+                        (str(e), "red"),
+                        ("\n\nIf this is a credits/quota issue, top up at\n"
+                         "https://console.anthropic.com/settings/billing and rerun.\n"
+                         "Or use `make agent-replay` to show a recorded run.", "dim white"),
+                    ),
+                    border_style="red",
+                ))
+                final_summary = f"(API error: {e})"
+                break
 
-            # Render reasoning text
             text_blocks = [b.text for b in response.content if b.type == "text"]
             for t in text_blocks:
                 render_thinking(t)
 
-            # Build the assistant message exactly as Claude returned it (for the next turn)
             assistant_content = []
             tool_uses = []
             for b in response.content:
@@ -226,52 +265,63 @@ async def run_agent(model: str, identity: str, goal: str, max_turns: int = 14) -
                 final_summary = "\n".join(text_blocks).strip()
                 break
 
-            # Execute tool calls, render, build tool_result messages
             tool_results = []
             for use in tool_uses:
                 render_tool_call(use.name, use.input)
                 res = await mcp.call_tool(use.name, use.input)
-                render_tool_result(use.name, res)
-                data = res.data if hasattr(res, "data") else res
+                initial_data = res.data if hasattr(res, "data") else res
+                render_tool_result(use.name, initial_data)
 
-                transcript[-1].setdefault("tool_results", []).append({
-                    "tool_use_id": use.id, "name": use.name, "data": data,
-                })
+                # Default: the data the model receives is what the server returned.
+                model_data = initial_data
+                approval_event = None
 
-                # Approval-gating: detect awaiting_approval and pause here
-                if isinstance(data, dict) and data.get("status") == "awaiting_approval":
-                    approval_id = data.get("approval_id", "")
+                # If the server suspended on an approval, pause for the human, then
+                # mutate the tool_result content the model sees so it can resume
+                # naturally with the approval_id.
+                if isinstance(initial_data, dict) and initial_data.get("status") == "awaiting_approval":
+                    approval_id = initial_data.get("approval_id", "")
                     render_approval_prompt(approval_id)
-                    status = await _wait_for_approval(mcp, approval_id)
+                    status, approver = await _wait_for_approval(mcp, approval_id)
+                    render_approval_decision(approval_id, status, approver)
+                    approval_event = {"approval_id": approval_id, "status": status, "approver": approver}
+
+                    model_data = dict(initial_data)
                     if status == "approved":
-                        # Inject a synthetic tool result that nudges the agent to resume
-                        # with the approval_id on its next refund call.
-                        data = dict(data)
-                        data["status"] = "approved"
-                        data["instructions"] = (
-                            f"The refund approval {approval_id} has been APPROVED by a human "
-                            "operator. Call issue_refund again with the SAME order_id and amount, "
+                        model_data["status"] = "approved"
+                        model_data["approver"] = approver
+                        model_data["instructions"] = (
+                            f"Approval {approval_id} has been APPROVED by {approver}. "
+                            "Call issue_refund again with the SAME order_id and amount, "
                             f"passing approval_id='{approval_id}' to finalize."
                         )
                     elif status == "rejected":
-                        data = dict(data)
-                        data["status"] = "rejected"
-                        data["instructions"] = (
-                            "The refund was REJECTED by a human operator. Do not retry. "
-                            "Document this in your final summary and stop."
+                        model_data["status"] = "rejected"
+                        model_data["instructions"] = (
+                            "The refund was REJECTED by a human operator. "
+                            "Do not retry — note this in your final summary and stop."
                         )
                     else:
-                        data = dict(data)
-                        data["status"] = "timeout"
-                        data["instructions"] = (
+                        model_data["status"] = "timeout"
+                        model_data["instructions"] = (
                             "Approval timed out. Stop the investigation and report what you found."
                         )
-                    transcript[-1]["tool_results"][-1]["data"] = data
+
+                # Persist both states so replay can re-show the full drama.
+                tr_entry = {
+                    "tool_use_id": use.id,
+                    "name": use.name,
+                    "data": initial_data,
+                }
+                if approval_event is not None:
+                    tr_entry["approval"] = approval_event
+                    tr_entry["resolved_data"] = model_data
+                transcript[-1].setdefault("tool_results", []).append(tr_entry)
 
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": use.id,
-                    "content": json.dumps(data, default=str),
+                    "content": json.dumps(model_data, default=str),
                 })
 
             messages.append({"role": "user", "content": tool_results})
@@ -291,6 +341,7 @@ async def run_agent(model: str, identity: str, goal: str, max_turns: int = 14) -
         "goal": goal,
         "turns": transcript,
         "final_summary": final_summary,
+        "captured_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -311,7 +362,7 @@ def main() -> int:
     args = ap.parse_args()
 
     if not SETTINGS.anthropic_api_key:
-        console.print("[red]ANTHROPIC_API_KEY not set. Either set it in .env, or use `make demo-replay` for offline.[/]")
+        console.print("[red]ANTHROPIC_API_KEY not set. Set it in .env, or use `make agent-replay` for offline.[/]")
         return 2
 
     record = asyncio.run(run_agent(args.model, args.identity, args.goal, args.max_turns))

@@ -1,10 +1,11 @@
 """Human-in-the-loop approval coordination.
 
 Flow:
-  1. Tool call hits server → creates pending approval, returns approval_id.
+  1. Agent calls a tier-5 tool (e.g. issue_refund) without an approval_id.
+     The server creates a pending approval record, returns awaiting_approval.
   2. Operator runs `make approve ID=<approval_id>` in another terminal.
-  3. Demo client polls `check_approval(approval_id)`; when approved, it calls
-     `execute_approved(approval_id)` which performs the deferred action.
+  3. The agent's client loop polls `check_approval(approval_id)` and, once
+     approved, calls the same tool again with the approval_id to finalize.
 
 A `pending_approval` event also lands on the `approvals` Kafka topic so the
 audit story stays streaming-native.

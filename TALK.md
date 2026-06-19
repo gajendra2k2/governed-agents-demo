@@ -68,4 +68,4 @@ Likely questions to be ready for:
 - *Doesn't shadow mode mean the agent learns to expect success?* Yes — that's why you keep shadow and execute structurally identical, and analyze would-be effects separately.
 - *Cost of multi-model routing?* Budgeted per tier. See "Production hardening" in README.
 - *Why Kafka vs. just a database?* Lineage is the through-line. The audit log IS a stream, by design — same primitive as the data layer.
-- *What about prompt injection?* Out of scope for this talk. Prompt injection threatens what the agent *says*; the server fences what the agent *does*. Both matter — they're different talks. (See also: the "before/after" Option B demo on the `legacy-scripted-demo` branch.)
+- *What about prompt injection?* Out of scope for this talk. Prompt injection threatens what the agent *says*; the server fences what the agent *does*. Both matter — they're different talks.
