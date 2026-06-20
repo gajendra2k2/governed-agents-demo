@@ -3,7 +3,7 @@
 services:
   kafka:
     image: apache/kafka:3.7.1
-    container_name: governed-agents-kafka
+    container_name: feed-and-fence-kafka
     ports:
       - "9092:9092"
     environment:

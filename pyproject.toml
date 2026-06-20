@@ -1,5 +1,5 @@
 [project]
-name = "governed-agents-demo"
+name = "feed-and-fence"
 version = "0.1.0"
 description = "Engineering governed agentic systems on real-time data — talk demo (IEEE Central Indiana)."
 readme = "README.md"

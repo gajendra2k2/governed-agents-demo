@@ -1,4 +1,4 @@
-# governed-agents-demo
+# feed-and-fence
 
 Companion repo for the talk **"Feeding the Agents — and Fencing Them: Engineering Governed Agentic Systems on Real-Time Data."**
 
@@ -73,8 +73,8 @@ sudo apt-get install -y python3.12 python3.12-venv make docker.io   # Debian/Ubu
 ## Quickstart
 
 ```bash
-git clone https://github.com/gajendra2k2/governed-agents-demo
-cd governed-agents-demo
+git clone https://github.com/gajendra2k2/feed-and-fence
+cd feed-and-fence
 cp .env.example .env                            # add your ANTHROPIC_API_KEY
 
 # Venv with Python 3.12 specifically (system python3 may be too old).

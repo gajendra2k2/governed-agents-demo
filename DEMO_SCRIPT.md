@@ -96,7 +96,7 @@ Switch back to T4. Say:
 
 > *"One agent. One goal. Eight tools. Three minutes. The agent investigated, the server fenced, a human approved, and the audit log captured everything. **The model never enforced anything. The server did. The data layer did.** That's the move: govern at the layers where you already know how to engineer."*
 
-Repo: github.com/gajendra2k2/governed-agents-demo · MIT · one `make agent` away.
+Repo: github.com/gajendra2k2/feed-and-fence · MIT · one `make agent` away.
 
 Hand off to Q&A.
 

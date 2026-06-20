@@ -19,7 +19,7 @@ from ..config import SETTINGS
 from ..topics import ORDERS
 from . import identity, state, tools
 
-mcp = FastMCP("governed-agents")
+mcp = FastMCP("feed-and-fence")
 
 
 def _actor() -> str:
