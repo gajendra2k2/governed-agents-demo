@@ -75,9 +75,14 @@ def cancel_order(order_id: str, reason: str) -> dict:
 
 @mcp.tool
 def issue_refund(order_id: str, amount: float, approval_id: str | None = None) -> dict:
-    """Issue a refund. Two-step: first call without approval_id returns
-    `awaiting_approval` with an approval_id. A human operator must approve it
-    out of band. Then call again with the approval_id to execute."""
+    """Issue a refund to recover funds from a fraudulent or unauthorized
+    order. Use this when goods have already shipped or money has changed
+    hands and you need to restore the legitimate cardholder — for example,
+    a shipped order belonging to a fraud burst.
+
+    Two-step: first call without approval_id returns `awaiting_approval`
+    with an approval_id. A human operator must approve it out of band.
+    Then call again with the approval_id to execute."""
     return tools.issue_refund(_actor(), order_id, amount, approval_id)
 
 

@@ -45,9 +45,14 @@ PAUSE_TOOL_AFTER = 1.0
 PAUSE_APPROVAL_WAIT = 3.5    # the "human is thinking" beat
 
 
-def _latest_transcript() -> Path | None:
+def _default_transcript() -> Path | None:
+    """Prefer canonical.json (the shipped talk-day transcript) if present,
+    otherwise fall back to the most recent agent-<ts>.json from a live run."""
     if not TRANSCRIPTS_DIR.exists():
         return None
+    canonical = TRANSCRIPTS_DIR / "canonical.json"
+    if canonical.exists():
+        return canonical
     files = sorted(TRANSCRIPTS_DIR.glob("agent-*.json"))
     return files[-1] if files else None
 
@@ -101,12 +106,12 @@ def main() -> int:
     if args.path:
         p = Path(args.path)
     else:
-        p = _latest_transcript()
+        p = _default_transcript()
         if p is None:
             console.print(f"[red]no transcripts found in {TRANSCRIPTS_DIR}[/]")
             console.print("[dim]run `make agent` once first to capture one[/]")
             return 1
-        console.print(f"[dim]using latest: {p}[/]")
+        console.print(f"[dim]using {p.name}[/]")
 
     if not p.exists():
         console.print(f"[red]transcript not found: {p}[/]")
